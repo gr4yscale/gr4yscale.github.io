@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>
+      
+      Securely self-hosting your data with Nextcloud &#43; Let&#39;s Encrypt &#43; Nginx Reverse Proxy &#43; Fail2ban - gr4yscale.com
+      
+    </title>
+    <link rel="stylesheet" href="/css/style.css" />
+
+    
+
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="apple-touch-icon-precomposed" href="/favicon.png">
+  </head>
+
+  <body class="site site-blog">
+    <div class="site-content">
+
+<main class="container">
+  <div class="article-meta">
+    <h1>Securely self-hosting your data with Nextcloud &#43; Let&#39;s Encrypt &#43; Nginx Reverse Proxy &#43; Fail2ban</h1>
+    <small class="date text-muted text-light">November 16, 2018</small>
+    
+  </div>
+
+  
+
+  
+
+<h2 id="intro">Intro</h2>
+
+<p>There are a lot of guides out there about how to setup and use
+nextcloud in a fairly default, typical configuration. This is to fill
+in gaps about my specific requirements, which seemed hard to track
+down information for.</p>
+
+<p>Where I can, rather than duplicating information, I&rsquo;ll link you to related guides.</p>
+
+<p>Correct implementation of the nginx and fail2ban setup are particularly hard to get
+right, so we&rsquo;ll go into more detail on that.</p>
+
+<h2 id="requirements">Requirements</h2>
+
+<ul>
+<li>map user permissions so that I am able to share my nextcloud folder (residing on a 10TB ext4 fs) with the rest of the system transparently</li>
+<li>reverse nginx proxy to provide a secure endpoint (this server is exposed to the net)</li>
+<li>keep let&rsquo;s encrypt certs renewed in an automated fashion</li>
+<li>fail2ban intrusion detection + with email alerts to gmail (without implementing a complex mail server)</li>
+<li>webcron for keeping folders up to date, no nightly syncs or whatever</li>
+</ul>
+
+<h2 id="bindfs-permissions-mapping">BindFS permissions mapping</h2>
+
+<p>I want to be able to interact with the 10TB filesystem which Nextcloud exposes however I like. Most guides only show you how to get NC up with a folder that it has full control over, which means the web server user owns it. Using NC&rsquo;s &ldquo;external storage&rdquo; plugin is not enough; the http server will still own that folder</p>
+
+<ul>
+<li>We want to share the nextcloud directory outside of the web server root so that it&rsquo;s easy to manage and work with the data outside of the NC interfaces</li>
+<li>We need to use BindFS to make a &ldquo;bind point&rdquo; that is used by Nextcloud via the Docker volume we expose</li>
+<li>In my case, I want to map /mnt/storage to /home/gr4yscale/docker-configs/nextcloud/storage-bound</li>
+<li>If you use Arch Linux, there is an AUR package <a href="https://aur.archlinux.org/packages/bindfs/">here</a>.</li>
+<li>From the documentation, it&rsquo;s somewhat easy to call bindfs ad-hoc with the correct flags to map the correct users/permissions, but persisting it in /etc/fstab is not well documented:</li>
+</ul>
+<div class="highlight"><pre style="background-color:#f0f3f3;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">/mnt/storage    /home/gr4yscale/docker-configs/nextcloud/storage-bound  fuse.bindfs nofail,perms<span style="color:#555">=</span><span style="color:#f60">0600</span>:u+X,map<span style="color:#555">=</span>gr4yscale/http:@users/@http:      <span style="color:#f60">0</span>       <span style="color:#f60">0</span></code></pre></div>
+<ul>
+<li>Ensure that permissions meet the bare minimum requirement to allow your user to read/write/list dirs</li>
+</ul>
+<div class="highlight"><pre style="background-color:#f0f3f3;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">sudo chmod -R <span style="color:#033">u</span><span style="color:#555">=</span>rwX,g<span style="color:#555">=</span>-rwx,o<span style="color:#555">=</span>-rwx storage</code></pre></div>
+<ul>
+<li>Ensure that the permissions on the bind point are correct:</li>
+</ul>
+<div class="highlight"><pre style="background-color:#f0f3f3;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">drwx------ <span style="color:#f60">34</span> http      http  <span style="color:#f60">4096</span> Nov <span style="color:#f60">15</span> <span style="color:#f60">09</span>:40 storage-bound</code></pre></div>
+<h2 id="reverse-nginx-proxy-configuration">Reverse nginx proxy configuration</h2>
+
+<ul>
+<li>To be continued..</li>
+</ul>
+
+<h2 id="automated-let-s-encrypt-certs-renewal">Automated Let&rsquo;s Encrypt certs renewal</h2>
+
+<p>This part has been done before in many guides, but I didn&rsquo;t like it. They almost all relied on the complicated, intertwined set of docker images seen here.</p>
+
+<ul>
+<li>use digitalocean DNS certbot plugin + systemd</li>
+<li>expose lets encrypt certs to containers</li>
+</ul>
+
+<h2 id="fail2ban-intrusion-detection-with-email-alerts">fail2ban intrusion detection, with email alerts</h2>
+
+<p>Setting up &ldquo;filters&rdquo; for Nextcloud is comprised of copy/pasting from random gists and tweaking. Testing / troubleshooting fail2ban is a bit tedius, here are my notes:</p>
+
+<ul>
+<li>enable jails for nginx, make filters if they don&rsquo;t exist
+
+<ul>
+<li>make filter and jail files from these templates:
+
+<ul>
+<li><a href="https://snippets.aktagon.com/snippets/554-how-to-secure-an-nginx-server-with-fail2ban">https://snippets.aktagon.com/snippets/554-how-to-secure-an-nginx-server-with-fail2ban</a></li>
+</ul></li>
+<li>use this log path,
+
+<ul>
+<li>logpath = /var/log/nginx/*access*.log*</li>
+</ul></li>
+<li>unless you want to add the path in arch.conf and then rely on that</li>
+</ul></li>
+<li>make custom filter for nextcloud
+
+<ul>
+<li>resources
+
+<ul>
+<li><a href="https://regex101.com">https://regex101.com</a></li>
+</ul></li>
+<li>nextcloud.conf in filter.d that is same as nextcloudpi example</li>
+<li>more example filters for NC
+
+<ul>
+<li><a href="https://help.nextcloud.com/t/fail2ban-with-nextcloud-12/31603/2">https://help.nextcloud.com/t/fail2ban-with-nextcloud-12/31603/2</a></li>
+<li><a href="https://github.com/hailthemelody/nextcloud-fail2ban">https://github.com/hailthemelody/nextcloud-fail2ban</a></li>
+</ul></li>
+<li>nextcloud config.php: loglevel, log_type &hellip; defaults are fine, for now&hellip;maybe better to explicitly set them</li>
+<li>rate-limiting login, maybe?
+
+<ul>
+<li>we could rate-limit the number of login attempts, even if they are successful?</li>
+<li>94.189.154.32 - - [09/Oct/2018:01:42:40 +0200] &ldquo;POST /login HTTP/2.0&rdquo; 303 0 &ldquo;-&rdquo; &ldquo;Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36&rdquo; &ldquo;-&rdquo;</li>
+<li>this is brittle because on NC updates we may need to tweak this?</li>
+</ul></li>
+</ul></li>
+<li>ensure timezone settings for nexcloud logs are correct in config.php
+
+<ul>
+<li>default UTC is fine, actually - ignore below</li>
+<li>Without this fail2ban won&rsquo;t detect failed logins as there is a time difference (in my case UTC -&gt; CEST = 2h) and won&rsquo;t ban failed logins.</li>
+<li>in nextcloud&rsquo;s config/config.php: &lsquo;logtimezone&rsquo; =&gt; &lsquo;Europe/Berlin&rsquo;,</li>
+<li>you can confirm or deny this with timedatectl</li>
+<li><a href="https://forum.owncloud.org/viewtopic.php?f=31&amp;t=26336#p88162">https://forum.owncloud.org/viewtopic.php?f=31&amp;t=26336#p88162</a></li>
+<li><a href="https://wiki.archlinux.org/index.php/time">https://wiki.archlinux.org/index.php/time</a> tells all about time</li>
+</ul></li>
+<li>test our filters with fail2ban-regex, ensure no misses:
+
+<ul>
+<li>example: sudo fail2ban-regex &ldquo;/home/gr4yscale/docker-configs/nextcloud/app/data/nextcloud.log&rdquo; /etc/fail2ban/filter.d/nextcloud.conf</li>
+<li>needed to use sudo cause of access permissions for nextcloud.log</li>
+<li>misses happened, we should check check nginx log_format
+
+<ul>
+<li>i didn&rsquo;t have the log_format defined, using the &ldquo;main&rdquo; template</li>
+</ul></li>
+</ul></li>
+<li>do a test (from browser) to get banned, then unban
+
+<ul>
+<li>disable nextloud&rsquo;s built in brute force protection first</li>
+<li>fail2ban-client set nextcloud unbanip <Banned IP></li>
+</ul></li>
+<li>restart fail2ban service and see that IPs stay banned
+
+<ul>
+<li>bantime -1 is bad, you want 1yr</li>
+<li>if you don&rsquo;t, upon service restart the IPs that were banned become unbanned</li>
+<li><a href="https://github.com/fail2ban/fail2ban/issues/1806#issuecomment-308748935">https://github.com/fail2ban/fail2ban/issues/1806#issuecomment-308748935</a></li>
+</ul></li>
+<li>start/enable systemd service for fail2ban
+
+<ul>
+<li>ensure systemd services start in the correct order</li>
+</ul></li>
+<li>test persisted firewall / netfilter / iptables rules
+
+<ul>
+<li>iptables-save + systemd service for iptables load
+
+<ul>
+<li><a href="https://bbs.archlinux.org/viewtopic.php?id=192505">https://bbs.archlinux.org/viewtopic.php?id=192505</a></li>
+</ul></li>
+<li>shorewall
+
+<ul>
+<li><a href="https://wiki.archlinux.org/index.php/Shorewall">https://wiki.archlinux.org/index.php/Shorewall</a></li>
+</ul></li>
+<li>iptables-persistent</li>
+</ul></li>
+</ul>
+
+<h2 id="interesting-applications">Interesting Applications</h2>
+
+<ul>
+<li>Kodi Streaming over WebDAV
+
+<ul>
+<li>TL;DR: in kodi add HTTPS WebDAV network location, use this path:</li>
+<li>nextcloud/remote.php/dav/files/your_username/some_folder</li>
+<li><a href="https://ownyourbits.com/2018/09/16/stream-media-files-from-nextcloud-to-your-android-and-ios-device-with-kodi/">https://ownyourbits.com/2018/09/16/stream-media-files-from-nextcloud-to-your-android-and-ios-device-with-kodi/</a></li>
+</ul></li>
+<li>hardlinks</li>
+</ul>
+
+<h2 id="related-links">Related links</h2>
+
+<ul>
+<li>Some inspirational projects:
+
+<ul>
+<li><a href="https://github.com/nextcloud/nextcloudpi">https://github.com/nextcloud/nextcloudpi</a></li>
+</ul></li>
+<li>Guides:
+
+<ul>
+<li><a href="https://www.c-rieger.de/nextcloud-installation-guide-advanced/#c09">https://www.c-rieger.de/nextcloud-installation-guide-advanced/#c09</a></li>
+</ul></li>
+<li><a href="https://www.reddit.com/r/selfhosted">Self-hosted Reddit</a></li>
+</ul>
+
+</main>
+
+    </div>
+    <footer>
+       
+       <p class="container-about container-center">
+        Hello, I'm Tyler. I do art things with code, and geek out with linux and free software.
+      You can <a href="https://www.patreon.com/gr4yscale">support me via Patreon</a>.
+       </p>
+
+       <nav>
+  <p>
+    
+    <a href="https://gr4yscale.github.io/cv.pdf">CV</a>
+    
+    <span class="text-muted"> | </span>
+    
+    <a href="https://www.linkedin.com/in/gr4yscale/">LinkedIn</a>
+    
+    <span class="text-muted"> | </span>
+    
+    <a href="https://github.com/freetonik">Github</a>
+    
+    <span class="text-muted"> | </span>
+    
+
+    
+  <p>
+</nav>
+
+       <div class="mt4"></div>
+       
+
+       <p class="small credits text-muted">
+         © Tyler Powers, 2019.<br>
+         Powered by <a href="https://gohugo.io/">Hugo</a>, <a href="https://github.com/kaushalmodi/ox-hugo/">ox-hugo</a> and <a href="https://www.netlify.com/">netlify</a>
+       </p>
+    </footer>
+
+    <script src="https://gr4yscale.com/js/mathjax-config.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS_HTML"></script>
+  </body>
+</html>
+

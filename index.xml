@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Home on gr4yscale.com</title>
+    <link>https://gr4yscale.com/</link>
+    <description>Recent content in Home on gr4yscale.com</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Fri, 16 Nov 2018 00:00:00 +0100</lastBuildDate>
+    
+        <atom:link href="https://gr4yscale.com/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Securely self-hosting your data with Nextcloud &#43; Let&#39;s Encrypt &#43; Nginx Reverse Proxy &#43; Fail2ban</title>
+      <link>https://gr4yscale.com/2018/11/nextcloud-lets-encrypt-nginx-reverse-proxy-fail2ban/</link>
+      <pubDate>Fri, 16 Nov 2018 00:00:00 +0100</pubDate>
+      
+      <guid>https://gr4yscale.com/2018/11/nextcloud-lets-encrypt-nginx-reverse-proxy-fail2ban/</guid>
+      <description>
+        
+        
+
+&lt;h2 id=&#34;intro&#34;&gt;Intro&lt;/h2&gt;
+
+&lt;p&gt;There are a lot of guides out there about how to setup and use
+nextcloud in a fairly default, typical configuration. This is to fill
+in gaps about my specific requirements, which seemed hard to track
+down information for.&lt;/p&gt;
+
+&lt;p&gt;Where I can, rather than duplicating information, I&amp;rsquo;ll link you to related guides.&lt;/p&gt;
+
+&lt;p&gt;Correct implementation of the nginx and fail2ban setup are particularly hard to get
+right, so we&amp;rsquo;ll go into more detail on that.&lt;/p&gt;
+
+&lt;h2 id=&#34;requirements&#34;&gt;Requirements&lt;/h2&gt;
+
+&lt;ul&gt;
+&lt;li&gt;map user permissions so that I am able to share my nextcloud folder (residing on a 10TB ext4 fs) with the rest of the system transparently&lt;/li&gt;
+&lt;li&gt;reverse nginx proxy to provide a secure endpoint (this server is exposed to the net)&lt;/li&gt;
+&lt;li&gt;keep let&amp;rsquo;s encrypt certs renewed in an automated fashion&lt;/li&gt;
+&lt;li&gt;fail2ban intrusion detection + with email alerts to gmail (without implementing a complex mail server)&lt;/li&gt;
+&lt;li&gt;webcron for keeping folders up to date, no nightly syncs or whatever&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&#34;bindfs-permissions-mapping&#34;&gt;BindFS permissions mapping&lt;/h2&gt;
+
+&lt;p&gt;I want to be able to interact with the 10TB filesystem which Nextcloud exposes however I like. Most guides only show you how to get NC up with a folder that it has full control over, which means the web server user owns it. Using NC&amp;rsquo;s &amp;ldquo;external storage&amp;rdquo; plugin is not enough; the http server will still own that folder&lt;/p&gt;
+
+&lt;ul&gt;
+&lt;li&gt;We want to share the nextcloud directory outside of the web server root so that it&amp;rsquo;s easy to manage and work with the data outside of the NC interfaces&lt;/li&gt;
+&lt;li&gt;We need to use BindFS to make a &amp;ldquo;bind point&amp;rdquo; that is used by Nextcloud via the Docker volume we expose&lt;/li&gt;
+&lt;li&gt;In my case, I want to map /mnt/storage to /home/gr4yscale/docker-configs/nextcloud/storage-bound&lt;/li&gt;
+&lt;li&gt;If you use Arch Linux, there is an AUR package &lt;a href=&#34;https://aur.archlinux.org/packages/bindfs/&#34;&gt;here&lt;/a&gt;.&lt;/li&gt;
+&lt;li&gt;From the documentation, it&amp;rsquo;s somewhat easy to call bindfs ad-hoc with the correct flags to map the correct users/permissions, but persisting it in /etc/fstab is not well documented:&lt;/li&gt;
+&lt;/ul&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;background-color:#f0f3f3;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;/mnt/storage    /home/gr4yscale/docker-configs/nextcloud/storage-bound  fuse.bindfs nofail,perms&lt;span style=&#34;color:#555&#34;&gt;=&lt;/span&gt;&lt;span style=&#34;color:#f60&#34;&gt;0600&lt;/span&gt;:u+X,map&lt;span style=&#34;color:#555&#34;&gt;=&lt;/span&gt;gr4yscale/http:@users/@http:      &lt;span style=&#34;color:#f60&#34;&gt;0&lt;/span&gt;       &lt;span style=&#34;color:#f60&#34;&gt;0&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;ul&gt;
+&lt;li&gt;Ensure that permissions meet the bare minimum requirement to allow your user to read/write/list dirs&lt;/li&gt;
+&lt;/ul&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;background-color:#f0f3f3;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;sudo chmod -R &lt;span style=&#34;color:#033&#34;&gt;u&lt;/span&gt;&lt;span style=&#34;color:#555&#34;&gt;=&lt;/span&gt;rwX,g&lt;span style=&#34;color:#555&#34;&gt;=&lt;/span&gt;-rwx,o&lt;span style=&#34;color:#555&#34;&gt;=&lt;/span&gt;-rwx storage&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;ul&gt;
+&lt;li&gt;Ensure that the permissions on the bind point are correct:&lt;/li&gt;
+&lt;/ul&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;background-color:#f0f3f3;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;&lt;code class=&#34;language-bash&#34; data-lang=&#34;bash&#34;&gt;drwx------ &lt;span style=&#34;color:#f60&#34;&gt;34&lt;/span&gt; http      http  &lt;span style=&#34;color:#f60&#34;&gt;4096&lt;/span&gt; Nov &lt;span style=&#34;color:#f60&#34;&gt;15&lt;/span&gt; &lt;span style=&#34;color:#f60&#34;&gt;09&lt;/span&gt;:40 storage-bound&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;h2 id=&#34;reverse-nginx-proxy-configuration&#34;&gt;Reverse nginx proxy configuration&lt;/h2&gt;
+
+&lt;ul&gt;
+&lt;li&gt;To be continued..&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&#34;automated-let-s-encrypt-certs-renewal&#34;&gt;Automated Let&amp;rsquo;s Encrypt certs renewal&lt;/h2&gt;
+
+&lt;p&gt;This part has been done before in many guides, but I didn&amp;rsquo;t like it. They almost all relied on the complicated, intertwined set of docker images seen here.&lt;/p&gt;
+
+&lt;ul&gt;
+&lt;li&gt;use digitalocean DNS certbot plugin + systemd&lt;/li&gt;
+&lt;li&gt;expose lets encrypt certs to containers&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&#34;fail2ban-intrusion-detection-with-email-alerts&#34;&gt;fail2ban intrusion detection, with email alerts&lt;/h2&gt;
+
+&lt;p&gt;Setting up &amp;ldquo;filters&amp;rdquo; for Nextcloud is comprised of copy/pasting from random gists and tweaking. Testing / troubleshooting fail2ban is a bit tedius, here are my notes:&lt;/p&gt;
+
+&lt;ul&gt;
+&lt;li&gt;enable jails for nginx, make filters if they don&amp;rsquo;t exist
+
+&lt;ul&gt;
+&lt;li&gt;make filter and jail files from these templates:
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://snippets.aktagon.com/snippets/554-how-to-secure-an-nginx-server-with-fail2ban&#34;&gt;https://snippets.aktagon.com/snippets/554-how-to-secure-an-nginx-server-with-fail2ban&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;use this log path,
+
+&lt;ul&gt;
+&lt;li&gt;logpath = /var/log/nginx/*access*.log*&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;unless you want to add the path in arch.conf and then rely on that&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;make custom filter for nextcloud
+
+&lt;ul&gt;
+&lt;li&gt;resources
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://regex101.com&#34;&gt;https://regex101.com&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;nextcloud.conf in filter.d that is same as nextcloudpi example&lt;/li&gt;
+&lt;li&gt;more example filters for NC
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://help.nextcloud.com/t/fail2ban-with-nextcloud-12/31603/2&#34;&gt;https://help.nextcloud.com/t/fail2ban-with-nextcloud-12/31603/2&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;https://github.com/hailthemelody/nextcloud-fail2ban&#34;&gt;https://github.com/hailthemelody/nextcloud-fail2ban&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;nextcloud config.php: loglevel, log_type &amp;hellip; defaults are fine, for now&amp;hellip;maybe better to explicitly set them&lt;/li&gt;
+&lt;li&gt;rate-limiting login, maybe?
+
+&lt;ul&gt;
+&lt;li&gt;we could rate-limit the number of login attempts, even if they are successful?&lt;/li&gt;
+&lt;li&gt;94.189.154.32 - - [09/Oct/2018:01:42:40 +0200] &amp;ldquo;POST /login HTTP/2.0&amp;rdquo; 303 0 &amp;ldquo;-&amp;rdquo; &amp;ldquo;Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36&amp;rdquo; &amp;ldquo;-&amp;rdquo;&lt;/li&gt;
+&lt;li&gt;this is brittle because on NC updates we may need to tweak this?&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;ensure timezone settings for nexcloud logs are correct in config.php
+
+&lt;ul&gt;
+&lt;li&gt;default UTC is fine, actually - ignore below&lt;/li&gt;
+&lt;li&gt;Without this fail2ban won&amp;rsquo;t detect failed logins as there is a time difference (in my case UTC -&amp;gt; CEST = 2h) and won&amp;rsquo;t ban failed logins.&lt;/li&gt;
+&lt;li&gt;in nextcloud&amp;rsquo;s config/config.php: &amp;lsquo;logtimezone&amp;rsquo; =&amp;gt; &amp;lsquo;Europe/Berlin&amp;rsquo;,&lt;/li&gt;
+&lt;li&gt;you can confirm or deny this with timedatectl&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;https://forum.owncloud.org/viewtopic.php?f=31&amp;amp;t=26336#p88162&#34;&gt;https://forum.owncloud.org/viewtopic.php?f=31&amp;amp;t=26336#p88162&lt;/a&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;https://wiki.archlinux.org/index.php/time&#34;&gt;https://wiki.archlinux.org/index.php/time&lt;/a&gt; tells all about time&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;test our filters with fail2ban-regex, ensure no misses:
+
+&lt;ul&gt;
+&lt;li&gt;example: sudo fail2ban-regex &amp;ldquo;/home/gr4yscale/docker-configs/nextcloud/app/data/nextcloud.log&amp;rdquo; /etc/fail2ban/filter.d/nextcloud.conf&lt;/li&gt;
+&lt;li&gt;needed to use sudo cause of access permissions for nextcloud.log&lt;/li&gt;
+&lt;li&gt;misses happened, we should check check nginx log_format
+
+&lt;ul&gt;
+&lt;li&gt;i didn&amp;rsquo;t have the log_format defined, using the &amp;ldquo;main&amp;rdquo; template&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;do a test (from browser) to get banned, then unban
+
+&lt;ul&gt;
+&lt;li&gt;disable nextloud&amp;rsquo;s built in brute force protection first&lt;/li&gt;
+&lt;li&gt;fail2ban-client set nextcloud unbanip &lt;Banned IP&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;restart fail2ban service and see that IPs stay banned
+
+&lt;ul&gt;
+&lt;li&gt;bantime -1 is bad, you want 1yr&lt;/li&gt;
+&lt;li&gt;if you don&amp;rsquo;t, upon service restart the IPs that were banned become unbanned&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;https://github.com/fail2ban/fail2ban/issues/1806#issuecomment-308748935&#34;&gt;https://github.com/fail2ban/fail2ban/issues/1806#issuecomment-308748935&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;start/enable systemd service for fail2ban
+
+&lt;ul&gt;
+&lt;li&gt;ensure systemd services start in the correct order&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;test persisted firewall / netfilter / iptables rules
+
+&lt;ul&gt;
+&lt;li&gt;iptables-save + systemd service for iptables load
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://bbs.archlinux.org/viewtopic.php?id=192505&#34;&gt;https://bbs.archlinux.org/viewtopic.php?id=192505&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;shorewall
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://wiki.archlinux.org/index.php/Shorewall&#34;&gt;https://wiki.archlinux.org/index.php/Shorewall&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;iptables-persistent&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&#34;interesting-applications&#34;&gt;Interesting Applications&lt;/h2&gt;
+
+&lt;ul&gt;
+&lt;li&gt;Kodi Streaming over WebDAV
+
+&lt;ul&gt;
+&lt;li&gt;TL;DR: in kodi add HTTPS WebDAV network location, use this path:&lt;/li&gt;
+&lt;li&gt;nextcloud/remote.php/dav/files/your_username/some_folder&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;https://ownyourbits.com/2018/09/16/stream-media-files-from-nextcloud-to-your-android-and-ios-device-with-kodi/&#34;&gt;https://ownyourbits.com/2018/09/16/stream-media-files-from-nextcloud-to-your-android-and-ios-device-with-kodi/&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;hardlinks&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;h2 id=&#34;related-links&#34;&gt;Related links&lt;/h2&gt;
+
+&lt;ul&gt;
+&lt;li&gt;Some inspirational projects:
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://github.com/nextcloud/nextcloudpi&#34;&gt;https://github.com/nextcloud/nextcloudpi&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;Guides:
+
+&lt;ul&gt;
+&lt;li&gt;&lt;a href=&#34;https://www.c-rieger.de/nextcloud-installation-guide-advanced/#c09&#34;&gt;https://www.c-rieger.de/nextcloud-installation-guide-advanced/#c09&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;&lt;/li&gt;
+&lt;li&gt;&lt;a href=&#34;https://www.reddit.com/r/selfhosted&#34;&gt;Self-hosted Reddit&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+      </description>
+    </item>
+    
+    <item>
+      <title>Projects portfolio</title>
+      <link>https://gr4yscale.com/portfolio/</link>
+      <pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+      
+      <guid>https://gr4yscale.com/portfolio/</guid>
+      <description>
+        
+        
+      </description>
+    </item>
+    
+  </channel>
+</rss>
